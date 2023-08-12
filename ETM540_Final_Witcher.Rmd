@@ -1,0 +1,277 @@
+---
+title: "ETM540 Final Exam"
+author: "James Witcher"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    number_sections: TRUE
+---
+
+```{r, eval=TRUE, include=FALSE}
+knitr::opts_chunk$set(tidy = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+library (kableExtra)
+library (tidyr)
+library (ggplot2)
+library (ompr)
+library (ompr.roi)
+library (ROI.plugin.glpk)
+library ("ggplot2")
+library ("dlstats")
+library(bookdown); library(rmarkdown);
+```
+
+# Production Planning
+
+The Portland company, Weatherman, makes a single, very specialized multipurpose tool.  Demand for the next four quarters are known to be 700, 1200, 550, and 1000 units respectively.  The production cost is $1250 per unit.  The per unit cost to hold one unit in inventory is 25% of the production cost per quarter. An inventory buffer of 25 units must be maintained at the end of every quarter (including at the end of the planning horizon) for warranty issues and other purposes.  Due to production capacity limitations, no more than 1000 units can be produced in any quarter. At the beginning of the planning, there are 30 units in inventory.  
+
+## Formulate an explicit mathematical optimization model for this problem using LaTeX in RMarkdown.
+
+**Data:**
+
+- $C^P_t$ = Production cost of each unit
+- $C^H_t$ = Hold Cost
+- $L^H_t$ = Minimum amount of units for inventory buffer.
+- $L^P_t$ = Maximum amounts of units that can be produced in a given Quarter.
+- $B^I$ = Inventory on hand at start of Q1.
+- $D_{t}$ = Demand for Quarter _t_.
+
+
+**Decision variables:**  
+
+- $x_{t}$ is the number of units to produce it Quarter _t_.
+- $z_{t}$ is the inventory of units at the end of Quarter _t_.
+
+
+
+$$
+\begin{split}
+\begin{aligned}
+\text{min   } \; & \sum\limits_{t=1}^{4} ( C^P_t\cdot x_{t} + C^H_t\cdot x_{t} )\\
+\text{s.t.: } \; & z_{1}=B^I + x_{1} - D_{1}\\
+                 & z_{t}=z_{t-1} + x_{t} - D_{t}, \; \forall t>1\\
+                 & x_{t} \leq L^P, \; \forall t\\
+                 & z_{t} \geq L^H, \; \forall t\\
+                 & x_{t} , \; z_{t} \geq 0, \; \forall \; t \\
+\end{aligned}
+\end{split}
+$$
+$$\pagebreak$$
+
+
+## Implement and solve your optimization model using ompr.
+
+```{r, eval=TRUE, include=FALSE}
+nTime <- 4    # amount of time periods
+demand <- 150  # Used for generating demand
+dem <- c(700, 1200, 550, 1000)   #defined by problem
+beg_inv <- 30  # Inventory at beginning of Quarter 1
+invcost <- .25 # Quarterly carry costs
+prodcost <- 1250 # Production costs per unit
+lmininv <- 25  # Maximum combined inventory
+lmaxpro <- 1000  # Maximum production in a quarter
+```
+
+```{r, eval=TRUE, include=FALSE}
+
+demand <- t(cbind (dem))
+colnames(demand)<-c("Q 1", "Q 2", "Q 3", "Q 4")
+kbl (demand, booktabs=T,
+     caption = "Product Demand over Time") |>
+  kable_styling(latex_options = "hold_position")
+
+```
+
+```{r, eval=TRUE, include=TRUE}
+promod <- MIPModel()
+promod <- add_variable (promod, Vx[tt], tt=1:nTime, 
+                        lb=0, type="continuous") # Production volume.
+promod <- add_variable (promod, Vz[tt], tt=1:nTime, 
+                        lb=0, type="continuous") # Inventory at end of quarter.
+promod <- set_objective(promod, sum_expr(prodcost * Vx[tt] + invcost * prodcost
+                                         * Vz[tt], tt=1:nTime), "min")
+promod <- add_constraint (promod, beg_inv + Vx[1]
+                          - dem [1] == Vz[1] ) #first week backlog
+promod <- add_constraint (promod, Vz[tt-1] + Vx[tt] - dem [tt] == Vz[tt],
+                          tt = 2:nTime ) #following weeks backlogs
+promod <- add_constraint (promod, Vx[tt] <= lmaxpro, tt = 1:nTime)
+#Maximum amount that can be produced per period.
+
+promod <- add_constraint (promod, Vz[tt] >= lmininv, tt = 1:nTime)
+#Min amount that must be held in inventory
+
+prores <- solve_model(promod, with_ROI(solver = "glpk"))
+prores$status
+prores$objective_value
+
+
+Sol <- rbind (
+  t(as.matrix(as.numeric(get_solution (prores, Vx[tt])[,3]))),
+  t(as.matrix(as.numeric(get_solution (prores, Vz[tt])[,3]))))
+  
+var_list <- c("$x_{t}$", "$z_{t}$") 
+Sol <- cbind(var_list, Sol)
+colnames(Sol) <- c("Variable", "$Q_{1}$", "$Q_{2}$", "$Q_{3}$", "$Q_{4}$")  
+rownames(Sol) <- c("Tool Production", "Tool Inventory (EOQ)")
+
+
+kbl (Sol, booktabs=T, escape=F,
+     caption="Production Planning Over Time") |>
+  kable_styling(latex_options = "hold_position")
+```
+
+
+
+$$\pagebreak$$
+
+## Interpret and discuss the solution to the problem.
+
+In the above production model, the goal is to reduce the production costs. The costs are not only the production cost, but also the holding costs per quarter. 
+
+Running the model indicates a successful optimization with the minimum production cost of $\$4,400,400$, while being able to meet the demand, for each quarter. This also fulfills the constraints of maximum production per quarter (1000 units), and the inventory buffer of a minimum of 25 units to be held at all times.
+
+
+## Modified Example Formulation
+
+> Weatherman is looking at investing in a manufacturing process that will decrease their manufacturing cost per item to $\$1100$ per unit.  Production capacity would increase to 2000 units per quarter but there is a setup cost of $\$5000$ each quarter in which units are produced.  
+
+> Create a new optimization formulation for this modified situation
+
+To do this version of the model we need to add the below variables.
+
+**Data:**
+
+- $C^s_t$ = New Setup costs
+
+
+**Decision variables:** 
+
+- $y_{t}$ if a setup cost for production for each quarter _t_  in which units are produced; 0 otherwise.
+
+$$
+\begin{split}
+\begin{aligned}
+\text{min   } \; & \sum\limits_{t=1}^{4} ( C^P_t\cdot x_{t} + C^H_t\cdot x_{t} + C^S_t\cdot y_{t} )\\
+\text{s.t.: } \; & z_{1}=B^I + x_{1} - D_{1}\\
+                 & z_{t}=z_{t-1} + x_{t} - D_{t}, \; \forall t>1\\
+                 & x_{t} \leq L^P, \; \forall t\\
+                 & z_{t} \geq L^H, \; \forall t\\
+                 & x_{t} , \; z_{t} \geq 0, \; \forall \; t \\
+                 & y_{t}\; \in \{0,1\} \; \forall \; t\\
+\end{aligned}
+\end{split}
+$$
+
+$$\pagebreak$$
+
+## Implement and Solve the modified model.  Discuss the results
+```{r, eval=TRUE, include=FALSE}
+fcost2 <- 5000 # Setup cost per quarter
+prodcost2 <- 1100 # Production costs per unit
+lmininv <- 25  # Maximum combined inventory
+lmaxpro2 <- 2000  # Maximum production in a quarter
+
+promod2 <- MIPModel()
+promod2 <- add_variable (promod2, Vx[tt], tt=1:nTime, 
+                        lb=0, type="continuous") # Production volume.
+promod2 <- add_variable (promod2, Vz[tt], tt=1:nTime, 
+                        lb=0, type="continuous") # Inventory at end of quarter.
+promod2 <- add_variable (promod2, Vy[tt], tt=1:nTime,
+                        lb=0, type="binary")    #Setup costs for part 2
+promod2 <- set_objective(promod2, sum_expr(prodcost2 * Vx[tt] + invcost
+                                           * prodcost2 * Vz[tt] + fcost2
+                                           * Vy[tt], tt=1:nTime), "min")
+
+
+promod2 <- add_constraint (promod2, beg_inv + 
+                             Vx[1] - dem [1] == Vz[1] ) #first week backlog
+
+promod2 <- add_constraint (promod2, Vz[tt-1] +
+                             Vx[tt] - dem [tt] == Vz[tt],
+                           tt = 2:nTime ) #following weeks backlogs
+
+promod2 <- add_constraint (promod2, Vx[tt] <= 
+                             lmaxpro2, tt = 1:nTime) #Maximum amount that can be produced per period.
+
+promod2 <- add_constraint (promod2, Vz[tt] >= 
+                             lmininv, tt = 1:nTime) #Min amount that must be held in inventory
+
+prores2 <- solve_model(promod2, with_ROI(solver = "glpk"))
+```
+
+```{r, eval=TRUE, include=TRUE}
+prores2$status
+prores2$objective_value
+
+
+Sol2 <- rbind (
+  t(as.matrix(as.numeric(get_solution (prores2, Vx[tt])[,3]))),
+  t(as.matrix(as.numeric(get_solution (prores2, Vz[tt])[,3]))))
+  
+var_list <- c("$x_{t}$", "$z_{t}$") 
+Sol2 <- cbind(var_list, Sol2)
+colnames(Sol2) <- c("Variable", "$Q_{1}$", "$Q_{2}$", "$Q_{3}$", "$Q_{4}$")  
+rownames(Sol2) <- c("Tool Production", "Tool Inventory (EOQ)")
+
+
+kbl (Sol2, booktabs=T, escape=F,
+     caption="Production Planning Over Time Adjusted") |>
+  kable_styling(latex_options = "hold_position")
+```
+
+## Compare the results between the models in light of managerial insights
+
+Below (Table 3) we see the comparison between the 2 models. With the new addition of the $\$5000$ setup costs, and the increase in production capacity the initial thought would be that we should try to focus production in the first  quarter or so, then try to save money by not producing units in the later quarters.
+In the comparison under the new conditions we do see a reduction in total production costs of $\$583,000$ ($\$4,400,400$ to $\$3,817,000$). The models shows us that the high carrying costs are our main focus and since the  carrying cost are a function of production costs, the model focused on reducing the amount of units being held each quarter to the minimum 25 units. 
+
+The company should pursue investing in the new manufacturing process.
+
+```{r, echo=FALSE, eval=TRUE, include=TRUE}
+
+Sol_compare <- rbind (
+  t(as.matrix(as.numeric(get_solution (prores, Vx[tt])[,3]))),
+  t(as.matrix(as.numeric(get_solution (prores, Vz[tt])[,3]))),
+  t(as.matrix(as.numeric(get_solution (prores2, Vx[tt])[,3]))),
+  t(as.matrix(as.numeric(get_solution (prores2, Vz[tt])[,3]))))
+
+var_list2 <- c("$x_{t}$", "$z_{t}$", "$x_2{t}$", "$z_2{t}$") 
+Sol_compare <- cbind(var_list2, Sol_compare)
+colnames(Sol_compare) <- c("Variable", "$Q_{1}$", "$Q_{2}$", "$Q_{3}$", "$Q_{4}$")  
+rownames(Sol_compare) <- c("Tool Production", "Tool Inventory (EOQ)", "Tool Production Adusted","Tool Inventory (EOQ) Adjusted")
+
+kbl (Sol_compare, booktabs=T, escape=F,
+     caption="Production Planning Over Time Comparison") |>
+  kable_styling(latex_options = "hold_position")
+```
+
+
+$$\pagebreak$$
+
+
+# DEA
+
+> Is DEA a tool for measuring relative or absolute efficiency?  Explain and discuss your reason(s) for your answer.  (Aim for one or two paragraphs.)
+
+  A DEA takes empirical data to measure productivity efficiency. It measures the efficiency of decision making units (DMU's) in the data set.
+
+  The efficiency that you are measuring is relative efficiency. This means you are measuring the efficiency relative to another entity. For example you have a business that has several branches each with different number of employees and varying amounts of transactions. Using a DEA you can find out the most efficient branch, and see how far off the other branches might be. This can help management make staffing decisions or other business 
+
+
+
+
+# Computational Complexity
+
+> Does changing a set of decision variables from continuous to general integers tend to increase, decrease, or leave unchanged the computational complexity of optimization?  Explain and discuss your reason(s) for your answer.  (Aim for one or two paragraphs.)
+
+
+  Changing variable from continuous to integers increases computational complexity a great deal. Forcing a variable to an integer vs floating point, forces the solver to lay the solutions on an integer versus what could be the optimum floating point solution. Ways around this is a procedure called "branch and bound", or a time constraint on the solver that gives you the "best solution up to a time limit".
+
+
+# Sensitivity Analysis
+
+> Describe a situation or application where the results of sensitivity analysis are of greater importance than the specific optimal decision variable values.  (Aim for one or two paragraphs.)
+
+  Sensitivity Analysis can help a business decide where extra resources could best be realized. For example if they have funds to build a new facility, sensitivity analysis could help them to decide what function that faculty should focus on. 
+
+  Where are they constrained? Maybe the storage fees are high because they pay a 3rd party to hold excess inventory. Should they focus on a warehouse. Maybe if they had more production capacity they would be more profitable. Should they focus on factory space. A sensitivity analysis could help them decide the best business descion.
+
